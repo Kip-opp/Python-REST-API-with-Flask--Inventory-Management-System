@@ -1,3 +1,4 @@
+import threading
 from flask import jsonify, request
 from external.openfoodfacts import fetch_by_barcode, fetch_by_name, parse_product
 
@@ -11,7 +12,7 @@ inventory = [
         "ingredients": "Filtered water, almonds, cane sugar",
         "nutriscore": "a",
         "price": 350,
-        "stock": 20
+        "stock": 20,
     },
     {
         "id": 2,
@@ -21,7 +22,7 @@ inventory = [
         "ingredients": "Roasted peanuts, sugar, salt",
         "nutriscore": "c",
         "price": 500,
-        "stock": 15
+        "stock": 15,
     },
     {
         "id": 3,
@@ -31,13 +32,86 @@ inventory = [
         "ingredients": "Whole grain rolled oats",
         "nutriscore": "a",
         "price": 250,
-        "stock": 30
+        "stock": 30,
     },
 ]
 
+# Thread-safe ID counter
+_id_counter = max((item["id"] for item in inventory), default=0)
+_id_lock = threading.Lock()
+
 
 def next_id():
-    return max((item["id"] for item in inventory), default=0) + 1
+    """Generate the next unique ID in a thread-safe manner."""
+    global _id_counter
+    with _id_lock:
+        _id_counter += 1
+        return _id_counter
+
+
+def validate_item_data(data, required_fields=None):
+    """
+    Validate item data with type checking and constraints.
+    Returns (is_valid, errors_dict) where errors_dict is empty if valid.
+    """
+    errors = {}
+
+    # Required fields
+    if required_fields:
+        for field in required_fields:
+            if not data.get(field):
+                errors[field] = f"{field} is required"
+
+    # Type and constraint validations
+    if "name" in data:
+        if not isinstance(data["name"], str) or not data["name"].strip():
+            errors["name"] = "name must be a non-empty string"
+        else:
+            data["name"] = data["name"].strip()
+
+    if "brand" in data:
+        if not isinstance(data["brand"], str):
+            errors["brand"] = "brand must be a string"
+        else:
+            data["brand"] = data["brand"].strip()
+
+    if "barcode" in data:
+        if not isinstance(data["barcode"], str):
+            errors["barcode"] = "barcode must be a string"
+        else:
+            data["barcode"] = data["barcode"].strip()
+
+    if "ingredients" in data:
+        if not isinstance(data["ingredients"], str):
+            errors["ingredients"] = "ingredients must be a string"
+        else:
+            data["ingredients"] = data["ingredients"].strip()
+
+    if "nutriscore" in data:
+        if not isinstance(data["nutriscore"], str):
+            errors["nutriscore"] = "nutriscore must be a string"
+        else:
+            data["nutriscore"] = data["nutriscore"].strip().lower()
+            if data["nutriscore"] and data["nutriscore"] not in "abcde":
+                errors["nutriscore"] = "nutriscore must be a-e or empty"
+
+    if "price" in data:
+        try:
+            data["price"] = float(data["price"])
+            if data["price"] < 0:
+                errors["price"] = "price must be non-negative"
+        except (ValueError, TypeError):
+            errors["price"] = "price must be a number"
+
+    if "stock" in data:
+        try:
+            data["stock"] = int(data["stock"])
+            if data["stock"] < 0:
+                errors["stock"] = "stock must be non-negative"
+        except (ValueError, TypeError):
+            errors["stock"] = "stock must be an integer"
+
+    return len(errors) == 0, errors
 
 
 def register_routes(app):
@@ -59,11 +133,12 @@ def register_routes(app):
     @app.post("/inventory")
     def add_item():
         data = request.get_json(force=True)
-        if not data.get("name"):
-            return jsonify({"error": "name is required"}), 400
+        is_valid, errors = validate_item_data(data, required_fields=["name"])
+        if not is_valid:
+            return jsonify({"error": "Validation failed", "details": errors}), 400
         item = {
             "id": next_id(),
-            "name": data.get("name"),
+            "name": data["name"],
             "brand": data.get("brand", ""),
             "barcode": data.get("barcode", ""),
             "ingredients": data.get("ingredients", ""),
@@ -81,9 +156,25 @@ def register_routes(app):
         if not item:
             return jsonify({"error": "Item not found"}), 404
         data = request.get_json(force=True)
-        for key in ["name", "brand", "barcode", "ingredients", "nutriscore", "price", "stock"]:
+        is_valid, errors = validate_item_data(data)
+        if not is_valid:
+            return jsonify({"error": "Validation failed", "details": errors}), 400
+        # Only update provided fields
+        updated_fields = []
+        for key in [
+            "name",
+            "brand",
+            "barcode",
+            "ingredients",
+            "nutriscore",
+            "price",
+            "stock",
+        ]:
             if key in data:
                 item[key] = data[key]
+                updated_fields.append(key)
+        if not updated_fields:
+            return jsonify({"message": "No fields provided to update"}), 200
         return jsonify(item), 200
 
     # ── DELETE /inventory/<id> ────────────────────────────────────────────────
@@ -106,19 +197,26 @@ def register_routes(app):
             if barcode:
                 data = fetch_by_barcode(barcode)
                 if data.get("status") == 0:
-                    return jsonify({"error": "Product not found on Open Food Facts"}), 404
-                return jsonify({
-                    "source": "openfoodfacts",
-                    "product": parse_product(data.get("product", {}))
-                }), 200
+                    return jsonify(
+                        {"error": "Product not found on Open Food Facts"}
+                    ), 404
+                return jsonify(
+                    {
+                        "source": "openfoodfacts",
+                        "product": parse_product(data.get("product", {})),
+                    }
+                ), 200
             else:
+                assert name is not None  # Ensured by earlier check
                 data = fetch_by_name(name)
                 products = data.get("products", [])
-                return jsonify({
-                    "source": "openfoodfacts",
-                    "count": len(products),
-                    "products": [parse_product(p) for p in products]
-                }), 200
+                return jsonify(
+                    {
+                        "source": "openfoodfacts",
+                        "count": len(products),
+                        "products": [parse_product(p) for p in products],
+                    }
+                ), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 502
 
@@ -135,6 +233,10 @@ def register_routes(app):
         barcode = data.get("barcode")
         if not barcode:
             return jsonify({"error": "barcode is required"}), 400
+        # Validate price and stock if provided
+        is_valid, errors = validate_item_data(data)
+        if not is_valid:
+            return jsonify({"error": "Validation failed", "details": errors}), 400
         try:
             off_data = fetch_by_barcode(barcode)
             if off_data.get("status") == 0:
@@ -151,6 +253,8 @@ def register_routes(app):
                 "stock": data.get("stock", 0),
             }
             inventory.append(item)
-            return jsonify({"message": "Imported from Open Food Facts", "item": item}), 201
+            return jsonify(
+                {"message": "Imported from Open Food Facts", "item": item}
+            ), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 502
