@@ -94,6 +94,17 @@ python -m pytest tests/ -v
 | GET | /external/product?name=... | Search Open Food Facts by product name |
 | POST | /external/product/import | Import product data from API into inventory |
 
+## Input Validation
+
+The API now includes comprehensive input validation for all endpoints:
+
+- **Required Fields**: `name` is required when creating items
+- **Data Types**: Price must be a number, stock must be an integer
+- **Constraints**: Price and stock must be non-negative; nutriscore must be a-e or empty
+- **Sanitization**: String fields are trimmed of whitespace
+
+Validation errors return a 400 status with detailed error messages.
+
 ## Project Structure
 
 ```
@@ -120,5 +131,7 @@ inventory-management-system-API/
 
 - **App Factory Pattern**: The application uses a factory pattern in `app/__init__.py` to create the Flask app instance, enabling better testability and configuration management.
 - **Separation of Concerns**: Routes are defined in `app/routes.py`, external API logic in `external/openfoodfacts.py`, and CLI commands in `cli_tool.py`.
+- **Input Validation**: All API endpoints validate input data types and constraints (e.g., non-negative prices, valid nutriscore grades) with detailed error messages.
+- **Thread-Safe ID Generation**: Item IDs are generated using a thread-safe counter to prevent race conditions in concurrent requests.
 - **Testing**: Comprehensive unit tests with mocked external dependencies ensure reliable functionality without requiring internet connectivity.
-- **Error Handling**: Proper HTTP status codes and error messages for all endpoints.
+- **Error Handling**: Proper HTTP status codes, detailed error messages, and improved CLI error reporting for better user experience.
