@@ -14,8 +14,8 @@ def list_items():
     print("─" * 82)
     for item in items:
         print(
-            f"{item['id']:<5} {item['name']:<28} {item.get('brand',''):<15}"
-            f" {item['price']:<8} {item['stock']:<8} {item.get('barcode','')}"
+            f"{item['id']:<5} {item['name']:<28} {item.get('brand', ''):<15}"
+            f" {item['price']:<8} {item['stock']:<8} {item.get('barcode', '')}"
         )
     print()
 
@@ -48,12 +48,21 @@ def add_item(args):
 
 def update_item(args):
     payload = {
-        k: v for k, v in vars(args).items()
-        if k not in {"cmd", "id"} and v is not None
+        k: v for k, v in vars(args).items() if k not in {"cmd", "id"} and v is not None
     }
+    if not payload:
+        print("\n✗ No fields provided to update. Use --help for usage.\n")
+        return
     res = requests.patch(f"{BASE_URL}/inventory/{args.id}", json=payload)
     if res.status_code == 200:
-        print(f"\n✓ Updated: {res.json()}\n")
+        response_data = res.json()
+        if (
+            "message" in response_data
+            and "No fields provided" in response_data["message"]
+        ):
+            print(f"\n✓ No changes made: {response_data['message']}\n")
+        else:
+            print(f"\n✓ Updated: {response_data}\n")
     else:
         print(f"✗ Error: {res.json()}")
 
@@ -107,9 +116,19 @@ def import_from_api(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Inventory Management CLI",
+        prog="inventory-cli",
+        description="Inventory Management CLI Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Examples:
+  inventory-cli list
+  inventory-cli show 1
+  inventory-cli add --name "Apple Juice" --price 150 --stock 20
+  inventory-cli update 1 --price 200
+  inventory-cli delete 1
+  inventory-cli find-api --barcode 3017624010701
+  inventory-cli import-api --barcode 3017624010701 --price 300
+
 Commands:
   list                           List all inventory items
   show <id>                      Show one item by ID
@@ -118,43 +137,55 @@ Commands:
   delete <id>                    Delete an item
   find-api --barcode/--name      Search Open Food Facts
   import-api --barcode           Fetch from API and save to inventory
-        """
+        """,
     )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
-    sub.add_parser("list")
+    sub.add_parser("list", help="List all inventory items")
 
-    show = sub.add_parser("show")
-    show.add_argument("id", type=int)
+    show = sub.add_parser("show", help="Show details of a specific item")
+    show.add_argument("id", type=int, help="Item ID to show")
 
-    add = sub.add_parser("add")
-    add.add_argument("--name", required=True)
-    add.add_argument("--brand", default="")
-    add.add_argument("--barcode", default="")
-    add.add_argument("--price", type=float, default=0)
-    add.add_argument("--stock", type=int, default=0)
+    add = sub.add_parser("add", help="Add a new item to inventory")
+    add.add_argument("--name", required=True, help="Item name")
+    add.add_argument("--brand", default="", help="Item brand")
+    add.add_argument("--barcode", default="", help="Item barcode")
+    add.add_argument("--price", type=float, default=0, help="Item price")
+    add.add_argument("--stock", type=int, default=0, help="Stock quantity")
 
-    update = sub.add_parser("update")
-    update.add_argument("id", type=int)
-    update.add_argument("--name")
-    update.add_argument("--brand")
-    update.add_argument("--barcode")
-    update.add_argument("--price", type=float)
-    update.add_argument("--stock", type=int)
+    update = sub.add_parser("update", help="Update an existing item")
+    update.add_argument("id", type=int, help="Item ID to update")
+    update.add_argument("--name", help="Update item name")
+    update.add_argument("--brand", help="Update item brand")
+    update.add_argument("--barcode", help="Update item barcode")
+    update.add_argument("--price", type=float, help="Update item price")
+    update.add_argument("--stock", type=int, help="Update stock quantity")
 
-    delete = sub.add_parser("delete")
-    delete.add_argument("id", type=int)
+    delete = sub.add_parser("delete", help="Delete an item from inventory")
+    delete.add_argument("id", type=int, help="Item ID to delete")
 
-    find_api = sub.add_parser("find-api")
-    find_api.add_argument("--barcode")
-    find_api.add_argument("--name")
+    find_api = sub.add_parser("find-api", help="Search Open Food Facts API")
+    find_api.add_argument("--barcode", help="Search by barcode")
+    find_api.add_argument("--name", help="Search by product name")
 
-    import_api = sub.add_parser("import-api")
-    import_api.add_argument("--barcode", required=True)
-    import_api.add_argument("--price", type=float, default=0)
-    import_api.add_argument("--stock", type=int, default=0)
+    import_api = sub.add_parser(
+        "import-api", help="Import product from Open Food Facts into inventory"
+    )
+    import_api.add_argument("--barcode", required=True, help="Barcode to import")
+    import_api.add_argument(
+        "--price", type=float, default=0, help="Set price for imported item"
+    )
+    import_api.add_argument(
+        "--stock", type=int, default=0, help="Set stock for imported item"
+    )
 
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except SystemExit as e:
+        if e.code != 0:
+            print("\nError: Invalid command or arguments. Use --help for usage.\n")
+            parser.print_usage()
+        raise
 
     if args.cmd == "list":
         list_items()
